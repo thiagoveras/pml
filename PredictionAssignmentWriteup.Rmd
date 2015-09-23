@@ -1,0 +1,231 @@
+---
+title: "Practical Machine Learning - Prediction Assignment Writeup"
+author: "Thiago Veras"
+date: "September 23, 2015"
+output: html_document
+---
+
+### Synopsis
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+### Data Processing
+#### 1. Configuring Workspace
+```{r}
+
+# Setting Working Directory
+setwd("~/Desktop/practical-machine-learning")
+
+# Installing required libraries
+require(knitr)
+require(caret)
+require(randomForest)
+require(rpart.plot)
+require(e1071)
+
+# Configuring some options
+options(width = 100)
+opts_chunk$set(message = F, error = F, warning = F, comment = NA, fig.align = 'center', dpi = 100, tidy = F, cache.path = '.cache/', fig.path = 'fig/')
+
+options(xtable.type = 'html')
+knit_hooks$set(inline = function(x) {
+  if(is.numeric(x)) {
+    round(x, getOption('digits'))
+  } else {
+    paste(as.character(x), collapse = ', ')
+  }
+})
+knit_hooks$set(plot = knitr:::hook_plot_html)
+
+```
+
+#### 2. Data Loading
+```{r}
+# Loading the Training Data
+training_data <- read.csv("data/pml-training.csv",na.strings=c("NA","#DIV/0!", ""))
+# Loading the Testing Data
+testing_data <- read.csv("data/pml-testing.csv",na.strings=c("NA","#DIV/0!", ""))
+
+# Taking a look in one line of each data, just to verify
+# head(training_data, n = 1)
+# head(testing_data, n = 1)
+```
+
+#### 3. Data Exploring
+```{r}
+# Verifiying the dimension of the training data
+dim(training_data)
+
+# Verifiying the dimension of the testing data
+dim(testing_data)
+
+# Tabulating the classes of the training data
+table(training_data$classe)
+```
+
+#### 4. Data Cleaning
+```{r}
+# Removing the NA data from training data
+training_data_no_na = training_data[,!apply(training_data,2,function(x) any(is.na(x)) )]
+# Removing the Information data (columns from 1 to 6)
+cleaned_training_data = training_data_no_na[,-c(1:6)]
+# Verify one line of the cleaned training data
+head(cleaned_training_data, n=1)
+
+# Verifying the dimension of the training data after the clean process
+dim(cleaned_training_data)
+
+# Verifying if the classe distribution continues the same
+table(cleaned_training_data$classe)
+
+# Removing the NA data from testing data too
+testing_data_no_na = testing_data[,!apply(testing_data,2,function(x) any(is.na(x)) )]
+# Removing the Information data (columns from 1 to 6)
+cleaned_testing_data = testing_data_no_na[,-c(1:6)]
+
+# Verifying the dimension of testing data after the clean process
+dim(cleaned_testing_data)
+```
+
+#### 5. Data Spliting
+```{r}
+#Spliting the training data for cross validation in two groups [60% and 40%]
+sub_groups = createDataPartition(y=cleaned_training_data$classe, p=0.6, list=FALSE)
+sub_group_for_training = cleaned_training_data[sub_groups, ]
+sub_group_for_testing = cleaned_training_data[-sub_groups, ]
+
+# Verifying the dimension of sup group #1 (60% for training)
+dim(sub_group_for_training)
+# Verifying the dimension of sup group #2 (40% for testing)
+dim(sub_group_for_testing)
+```
+
+#### 6. Data Manipulation
+```{r}
+set.seed(3141592)
+fit_model <- randomForest(classe~., data=sub_group_for_training, importance=TRUE, ntree=100)
+varImpPlot(fit_model)
+```
+
+Using the graphs above, we select the top 10 variables
+
+```{r}
+# Defining the top 10 variables based on the graphs
+top10variables <- c("yaw_belt","roll_belt","num_window","pitch_belt","magnet_dumbbell_z","magnet_dumbbell_y","pitch_forearm","accel_dumbbell_y","roll_arm","roll_forearm")
+
+# Analyzing the correlations between these 10 variables
+correlations = cor(sub_group_for_training[,top10variables])
+# Diagnonal with 0
+diag(correlations) <- 0
+# Absolute value correlation above 75%
+which(abs(correlations)>0.75, arr.ind=TRUE)
+```
+
+We have a problem between yaw_belt and roll_belt with a high correlation.
+
+```{r}
+# Analyzing the correlations between yaw_belt and roll_belt
+cor(sub_group_for_training$yaw_belt, sub_group_for_training$roll_belt)
+```
+
+We eliminate the yaw_belt and run again the correlations
+
+```{r}
+# Defining the top 9 variables based on the previous results
+top9variables <- c("roll_belt","num_window","pitch_belt","magnet_dumbbell_z","magnet_dumbbell_y","pitch_forearm","accel_dumbbell_y","roll_arm","roll_forearm")
+
+# Analyzing the correlations between these 9 variables
+correlations = cor(sub_group_for_training[,top9variables])
+# Diagnonal with 0
+diag(correlations) <- 0
+# Absolute value correlation above 75%
+which(abs(correlations)>0.75, arr.ind=TRUE)
+```
+
+With these top 9 variables no correlations above 75%. Let's validate the decision.
+
+```{r}
+# Tree classifier to identify if is better to remove yaw_belt or roll_belt
+fit_model <- rpart(classe~., data=sub_group_for_training, method="class")
+prp(fit_model)
+```
+
+A quick tree classifier selects roll_belt as the first discriminant among all variables. This tree can prove that was a good choice eliminate the yaw_belt instead of roll_belt. 
+
+#### 7. Data Modeling
+
+```{r}
+set.seed(3141592)
+#Training the machine
+fit_model <- train(classe~roll_belt +
+                          num_window +
+                          pitch_belt +
+                          magnet_dumbbell_y +
+                          magnet_dumbbell_z +
+                          pitch_forearm +
+                          accel_dumbbell_y +
+                          roll_arm +
+                          roll_forearm,
+                  data=sub_group_for_training,
+                  method="rf",
+                  trControl=trainControl(method="cv",number=2),
+                  prox=TRUE,
+                  verbose=TRUE,
+                  allowParallel=TRUE)
+
+# Saving the model
+saveRDS(fit_model, "model_random_forest.Rds")
+# Reading the model
+fit_model <- readRDS("model_random_forest.Rds")
+```
+
+### Results
+#### 1. Accuracy
+```{r}
+# Predicting with the fit model and sub group for testing (40% of original training data)
+predictions <- predict(fit_model, newdata=sub_group_for_testing)
+confusion_matrix <- confusionMatrix(predictions, sub_group_for_testing$classe)
+confusion_matrix
+```
+
+#### 2. Out of sample error rate
+```{r}
+# Defining the Out of sample error rate
+out_of_sample_error_rate = sum(predictions != sub_group_for_testing$classe) / length(sub_group_for_testing$classe)
+out_of_sample_error_rate
+```
+
+### Prediction Assignment Submission
+#### Executing the classification of 20 observations using a Random Forest algorithm
+```{r}
+# Predicting with the fit model and the cleaned testing data (from pml-testing.csv)
+predictions <- predict(fit_model, newdata=cleaned_testing_data)
+cleaned_testing_data$classe <- predictions
+
+# Submiting a csv file with problem id and predicted "classe"
+submit <- data.frame(problem_id = cleaned_testing_data$problem_id, classe = predictions)
+write.csv(submit, file = "coursera-submission.csv", row.names = FALSE)
+
+# Creating the answers files for each problem with the predicted "classe" inside of the file
+answers = cleaned_testing_data$classe
+write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_",i,".txt")
+    write.table(x[i], file=filename, quote=FALSE, row.names=FALSE, col.names=FALSE)
+  }
+}
+write_files(answers)
+
+# OBS: The submition for Coursera is via upload in the web app.
+```
+
+### Conclusion
+
+In this assignment, we analyzed and worked with an interesting database.
+
+We did some cleaning in the data and then submit it for some tests.
+Finally, we trained the machine learning using random forest algorithm and obtained success in 20 observations/tests suggested by Coursera.
+
+Our accuracy reached 99.76% and the out of sample error rate was 0.24%.
+
